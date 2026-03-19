@@ -20,6 +20,12 @@ def create_app():
     with app.app_context():
         db.create_all()
 
+
+
+    @app.route("/")
+    def home():
+        return {"message": "Backend is running"}
+    
     @app.route("/api/categories", methods=["GET"])
     def list_categories():
         rows = Category.query.order_by(Category.name).all()
@@ -52,10 +58,51 @@ def create_app():
     def list_expenses():
         page = int(request.args.get("page", 1))
         per_page = min(int(request.args.get("per_page", 10)), 50)
-        offset = page * per_page
-        q = Expense.query
-        rows = q.order_by(Expense.expense_date.desc(), Expense.id.desc()).offset(offset).limit(per_page).all()
-        total = Expense.query.count()
+
+
+# BUG FIX #1 : offset was `page * per_page` which skips the first
+        # page entirely. Page 1 should start at offset 0, so it must be (page-1)*per_page.
+
+        # offset = page * per_page
+
+ 
+        offset = (page - 1) * per_page
+
+
+
+
+# BUG FIX #2(a)(rows): MUST filter is_deleted==0 here — without this,
+        # soft-deleted expenses come back in the re-fetch after delete,
+        # overwriting the optimistic removal in the frontend.
+
+
+
+        # q = Expense.query
+        # rows = q.order_by(Expense.expense_date.desc(), Expense.id.desc()).offset(offset).limit(per_page).all()
+
+
+          
+        q = Expense.query.filter(Expense.is_deleted == 0)
+        rows = (
+            q.order_by(Expense.expense_date.desc(), Expense.id.desc())
+            .offset(offset)
+            .limit(per_page)
+            .all()
+        )
+
+
+
+# BUG FIX #2(b) : total count was not filtering out soft-deleted rows,
+        # so deleted expenses were still included in the page count.
+
+
+        # total = Expense.query.count()       
+
+
+        
+        total = Expense.query.filter(Expense.is_deleted == 0).count()
+ 
+
         return jsonify(
             {
                 "items": [
@@ -63,7 +110,21 @@ def create_app():
                         "id": e.id,
                         "category_id": e.category_id,
                         "category_name": e.category.name if e.category else "",
-                        "amount": str(e.amount),
+
+
+# BUG FIX #3 : amount was serialised as str(e.amount),
+                        # causing string concatenation in the frontend reduce().
+                        # Return a float so the frontend receives a proper number.
+
+
+
+                        # "amount": str(e.amount),  
+
+
+                        "amount": float(e.amount),
+
+
+
                         "description": e.description or "",
                         "expense_date": e.expense_date.isoformat() if e.expense_date else None,
                     }
@@ -99,7 +160,9 @@ def create_app():
                 {
                     "id": e.id,
                     "category_id": e.category_id,
-                    "amount": str(e.amount),
+                    # "amount": str(e.amount),
+                    "amount": float(e.amount),
+
                     "description": e.description,
                     "expense_date": e.expense_date.isoformat(),
                 }
@@ -178,3 +241,9 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)
+
+
+
+
+
+

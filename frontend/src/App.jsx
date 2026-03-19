@@ -30,6 +30,8 @@ function App() {
   });
   const [catName, setCatName] = useState("");
   const [msg, setMsg] = useState("");
+  const [deletingId, setDeletingId] = useState(null);
+
 
   const loadCategories = useCallback(async () => {
     const r = await fetch(`${API}/categories`);
@@ -59,9 +61,24 @@ function App() {
     try {
       const r = await fetch(`${API}/reports/monthly-trend`);
       const data = await r.json();
-      const series = data.monthly_series.map((row) => ({
-        month: row.month,
-        total: row.total,
+
+
+      // BUG FIX #4: removed this mapping since the API response structure was updated to use
+      //  trend_rows with period and spend fields instead of monthly_series with month and total fields
+
+
+      // const series = data.monthly_series.map((row) => ({ 
+      //   month: row.month,
+      //   total: row.total,
+      // }));
+
+
+      //  Updated mapping to match new API response structure (trend_rows instead of monthly_series)
+
+
+      const series = (data.trend_rows || []).map((row) => ({
+        month: row.period,
+        total: row.spend,
       }));
       setTrendData(series);
     } catch (e) {
@@ -126,15 +143,57 @@ function App() {
     }
   };
 
+
+   // BUG FIX 7(b): Optimistically remove from UI immediately so the row disappears at once
+
+
+  // const removeExpense = async (id) => {
+  //   await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
+  //   loadExpenses();
+  //   loadMonthlyReport();
+  //   loadTrend();
+  // };
+
+
+
   const removeExpense = async (id) => {
-    await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
-    loadExpenses();
-    loadMonthlyReport();
-    loadTrend();
+    setDeletingId(id);
+    // Optimistically remove from UI immediately so the row disappears at once
+    setExpenses((prev) => prev.filter((e) => e.id !== id));
+    const r = await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
+    if (!r.ok) {
+      // If delete failed on server, reload to restore the row
+      await loadExpenses();
+    } else {
+      // Re-fetch to sync total count and pagination correctly
+      loadExpenses();
+      loadMonthlyReport();
+      loadTrend();
+    }
+    setDeletingId(null);
   };
 
-  const pageTotal = expenses.reduce((a, e) => a + e.amount, 0);
-  const totalPages = Math.max(1, Math.floor(total / perPage));
+
+  // BUG FIX #1:  Corrected from a + e.amount to a + parseFloat(e.amount) to ensure numerical addition instead of string concatenation
+
+  // const pageTotal = expenses.reduce((a, e) => a + e.amount, 0);
+
+
+  //  use parseFloat() to ensure numeric addition, not string concatenation
+  const pageTotal = expenses.reduce((a, e) => a + parseFloat(e.amount), 0);
+
+
+
+  //  BUG FIX #3:corrected from Math.floor to Math.ceil to ensure that partial pages are counted
+  //  as a full page, and added Math.max to ensure at least 1 page is shown even if there are no expenses
+
+
+  // const totalPages = Math.max(1, Math.floor(total / perPage));
+
+
+  //  Math.ceil so partial pages count as a full page
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+
 
   return (
     <>
@@ -242,18 +301,53 @@ function App() {
           </div>
         </div>
         <p className="muted">
-          Sum on this page (strings): <strong>{String(pageTotal)}</strong>
+
+
+
+          {/* BUG FIX #2: removed "strings" label and String() cast to show a real numeric total instead of 
+        a string representation, and corrected from String(pageTotal) to pageTotal.toFixed(2) to format the 
+        total as a number with 2 decimal places */}
+
+
+          {/* Sum on this page (strings): <strong>{String(pageTotal)}</strong>  
+
+          {/* removed "strings" label and String() cast — show a real numeric total */}
+          Page total: <strong>{pageTotal.toFixed(2)}</strong>
+
+
         </p>
         <div className="chart-wrap">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={monthlyByCat} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+
+            {/* BUG FIX #5:left margin increased from 0 to 20 to prevent Y-axis labels from being cut off */}
+
+
+            {/* <BarChart data={monthlyByCat} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}> 
+
+            {/*  left margin increased from 0 to 20 so Y-axis labels aren't clipped */}
+            <BarChart
+              data={monthlyByCat}
+              margin={{ top: 8, right: 8, left: 20, bottom: 0 }}
+            >
+
+
               <CartesianGrid strokeDasharray="3 3" stroke="#38444d" />
               <XAxis dataKey="name" stroke="#8b98a5" />
               <YAxis stroke="#8b98a5" />
               <Tooltip
                 contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
               />
-              <Bar dataKey="value" fill="#1d9bf0" name="Total" />
+
+              {/* BUG FIX #6: corrected from "value" to "amt" based on the data structure in monthlyByCat  */}
+
+
+              {/* <Bar dataKey="value" fill="#1d9bf0" name="Total" />  */}
+
+
+              {/*  corrected from "value" to "amt" based on the data structure in monthlyByCat */}
+              <Bar dataKey="amt" fill="#1d9bf0" name="Total" />
+
+
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -299,12 +393,25 @@ function App() {
                 <td>{e.amount}</td>
                 <td>{e.description}</td>
                 <td>
-                  <button
+                  {/* <button
                     type="button"
                     className="danger"
                     onClick={() => removeExpense(e.id)}
                   >
                     Delete
+                  </button> */}
+
+
+
+                  {/* BUG FIX #7(a): Added disabled state and "Deleting…" text to delete button when an expense is 
+being deleted to provide better user feedback and prevent multiple clicks while the delete operation is in progress. */}
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={deletingId === e.id}
+                    onClick={() => removeExpense(e.id)}
+                  >
+                    {deletingId === e.id ? "Deleting…" : "Delete"}
                   </button>
                 </td>
               </tr>
@@ -338,3 +445,7 @@ function App() {
 }
 
 export default App;
+
+
+
+
